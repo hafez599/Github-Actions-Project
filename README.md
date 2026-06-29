@@ -227,3 +227,4 @@ Keep returning to the main story:
 2. verify
 3. package
 4. deliver
+5. to check the ci/cd pipeline
