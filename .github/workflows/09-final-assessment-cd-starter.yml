@@ -102,7 +102,6 @@ jobs:
       - name: Debug needs outputs
         run: |
           echo "DEBUG (deploy job) tag=[${{ needs.build-and-push.outputs.image_tag }}]"
-          echo "DEBUG (deploy job) ref=[${{ needs.build-and-push.outputs.image_ref }}]"
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -128,21 +127,21 @@ jobs:
           envs: REGISTRY_HOST,REGISTRY_PASSWORD
           script: |
             set -e
-
-            IIMAGE_REF="${{ secrets.ECR_REGISTRY }}/${{ secrets.ECR_REPOSITORY }}:${IMAGE_TAG}"
+          
             IMAGE_TAG="${{ needs.build-and-push.outputs.image_tag }}"
+            IMAGE_REF="${{ secrets.ECR_REGISTRY }}/${{ secrets.ECR_REPOSITORY }}:${IMAGE_TAG}"
             COMMIT_SHA="${{ github.sha }}"
             APP_PORT="${{ env.APP_PORT }}"
             DEPLOYED_AT="${{ github.run_id }}"
-
+          
             echo "DEBUG (remote script) IMAGE_REF=[$IMAGE_REF]"
             echo "DEBUG (remote script) IMAGE_TAG=[$IMAGE_TAG]"
-
+          
             docker --version
             echo "$REGISTRY_PASSWORD" | docker login --username AWS --password-stdin "$REGISTRY_HOST"
             docker pull "$IMAGE_REF"
             docker rm -f "${{ env.IMAGE_NAME }}" || true
-
+          
             docker run -d \
               --name "${{ env.IMAGE_NAME }}" \
               -p "${APP_PORT}:${APP_PORT}" \
@@ -153,7 +152,7 @@ jobs:
               -e IMAGE_TAG="$IMAGE_TAG" \
               -e DEPLOY_MODE=ci \
               "$IMAGE_REF"
-
+          
             for i in {1..10}; do
               if curl -sf "http://127.0.0.1:${APP_PORT}/health"; then
                 echo "Health check passed"
@@ -162,10 +161,9 @@ jobs:
               echo "Waiting for app to become healthy... ($i/10)"
               sleep 3
             done
-
+          
             curl -sf "http://127.0.0.1:${APP_PORT}/version"
             curl -sf "http://127.0.0.1:${APP_PORT}/status"
-
       - name: Validate deployed app from GitHub Actions
         run: |
           BASE_URL="http://${{ secrets.EC2_HOST }}:${{ env.APP_PORT }}"
