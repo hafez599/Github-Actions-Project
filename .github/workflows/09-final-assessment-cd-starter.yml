@@ -17,8 +17,7 @@ jobs:
     name: Build and push release image
     if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
-    
-    # FIX #1: Outputs must be indented directly under the job level, NOT inside steps.
+
     outputs:
       image_tag: ${{ steps.image-tag.outputs.value }}
       image_ref:  ${{ steps.image-ref.outputs.value }}
@@ -61,9 +60,8 @@ jobs:
         id: image-ref
         env:
           REGISTRY_HOST: ${{ secrets.ECR_REGISTRY }}
-          REPO_NAME: ${{ secrets.ECR_REPOSITORY }}
         run: |
-          REF="$REGISTRY_HOST/$IMAGE_NAME:${{ steps.image-tag.outputs.value }}"
+          REF="${REGISTRY_HOST}/${{ env.IMAGE_NAME }}:${{ steps.image-tag.outputs.value }}"
           echo "value=$REF" >> "$GITHUB_OUTPUT"
 
       # Step 5: Prepare Buildx
@@ -102,7 +100,6 @@ jobs:
       - build-and-push
     runs-on: ubuntu-latest
     
-    # FIX #2: Explicitly pass down the global workflow environment variables to this job
     env:
       IMAGE_NAME: myapp
       APP_PORT: "8000"
