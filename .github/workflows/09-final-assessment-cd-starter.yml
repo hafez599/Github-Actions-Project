@@ -21,7 +21,7 @@ on:
       - closed
 
 env:
-  IMAGE_NAME: tiny-health-app
+  IMAGE_NAME: myapp
   APP_PORT: "8000"
   # Keep one exact image name for the whole assessment.
   # The tag will change per run, but the image name should stay stable.
