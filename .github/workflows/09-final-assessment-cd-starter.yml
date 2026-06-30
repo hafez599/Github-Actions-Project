@@ -36,8 +36,6 @@ jobs:
     outputs:
       image_tag: "${{ steps.image-tag.outputs.value }}"
       image_ref: "${{ steps.image-ref.outputs.value }}"
-      ecr_password: "${{ steps.login-ecr.outputs.password }}" # Exposes token to the deploy job
-
     steps:
       # Step 1: Confirm required secrets exist and fail clearly if any are missing
       - name: Check required GitHub secrets
@@ -78,7 +76,8 @@ jobs:
           REGISTRY_HOST: ${{ secrets.ECR_REGISTRY }}
           REPO_NAME: ${{ secrets.ECR_REPOSITORY }}
         run: |
-          echo "value=$REGISTRY_HOST/$REPO_NAME:${{ steps.image-tag.outputs.value }}" >> "$GITHUB_OUTPUT"
+          REF="$REGISTRY_HOST/$IMAGE_NAME:${{ steps.image-tag.outputs.value }}"
+          echo "value=$REF" >> "$GITHUB_OUTPUT"
 
       # Step 5: Prepare Buildx
       - name: Set up Docker Buildx
@@ -117,89 +116,79 @@ jobs:
     needs:
       - build-and-push
     runs-on: ubuntu-latest
-
     steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Get ECR login password
+        id: ecr-password
+        run: |
+          echo "value=$(aws ecr get-login-password --region ${{ secrets.AWS_REGION }})" >> "$GITHUB_OUTPUT"
+
       - name: Deploy image over SSH
         uses: appleboy/ssh-action@v1.0.3
         env:
           REGISTRY_HOST: ${{ secrets.ECR_REGISTRY }}
+          REGISTRY_PASSWORD: ${{ steps.ecr-password.outputs.value }}
           IMAGE_TAG: ${{ needs.build-and-push.outputs.image_tag }}
           IMAGE_REF: ${{ needs.build-and-push.outputs.image_ref }}
-          ECR_PASSWORD: ${{ needs.build-and-push.outputs.ecr_password }} # Pulls job output safely
           COMMIT_SHA: ${{ github.sha }}
           APP_PORT: ${{ env.APP_PORT }}
+          DEPLOYED_AT: ${{ github.run_id }}
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
-          envs: REGISTRY_HOST,IMAGE_TAG,IMAGE_REF,ECR_PASSWORD,COMMIT_SHA,APP_PORT
-          script_stop: true
+          envs: REGISTRY_HOST,REGISTRY_PASSWORD,IMAGE_TAG,IMAGE_REF,COMMIT_SHA,APP_PORT,DEPLOYED_AT
           script: |
-            echo "=== Step 1: Confirming Docker installation ==="
-            if ! command -v docker &> /dev/null; then
-              echo "Error: Docker is not installed on the remote host."
-              exit 1
-            fi
+            set -e
 
-            echo "=== Step 2 & 3: Logging into ECR Registry from Remote Host ==="
-            echo "$ECR_PASSWORD" | docker login --username AWS --password-stdin $REGISTRY_HOST
+            # 1. Confirm Docker exists
+            docker --version
 
-            echo "=== Step 4: Pulling exact image reference ==="
-            docker pull $IMAGE_REF
+            # 2. Log in to ECR on the remote host using the token we generated
+            echo "$REGISTRY_PASSWORD" | docker login --username AWS --password-stdin "$REGISTRY_HOST"
 
-            echo "=== Step 5 & 6: Replacing container safely & injecting envs ==="
-            if [ "$(docker ps -aq -f name=tiny-health-app)" ]; then
-                echo "Stopping and removing existing container..."
-                docker stop tiny-health-app
-                docker rm tiny-health-app
-            fi
+            # 3. Pull the exact image
+            docker pull "$IMAGE_REF"
 
+            # 4. Remove old container safely if it exists
+            docker rm -f tiny-health-app || true
+
+            # 5/6. Run the new container, passing env vars
             docker run -d \
               --name tiny-health-app \
-              -p ${APP_PORT}:${APP_PORT} \
-              -e APP_ENV="production" \
-              -e APP_VERSION="${IMAGE_TAG}" \
-              -e COMMIT_SHA="${COMMIT_SHA}" \
-              -e DEPLOYED_AT="$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
-              -e IMAGE_TAG="${IMAGE_TAG}" \
-              -e DEPLOY_MODE="CD_Pipeline" \
-              --restart unless-stopped \
-              $IMAGE_REF
+              -p "${APP_PORT}:${APP_PORT}" \
+              -e APP_ENV=production \
+              -e APP_VERSION="$IMAGE_TAG" \
+              -e COMMIT_SHA="$COMMIT_SHA" \
+              -e DEPLOYED_AT="$DEPLOYED_AT" \
+              -e IMAGE_TAG="$IMAGE_TAG" \
+              -e DEPLOY_MODE=ci \
+              "$IMAGE_REF"
 
-            echo "=== Step 7: Waiting for /health check locally on host ==="
-            echo "Allowing container startup time..."
-            sleep 5
-            
+            # 7. Wait for /health locally on the host
             for i in {1..10}; do
-              if curl -s -f http://127.0.0.1:${APP_PORT}/health > /dev/null; then
-                echo "Local health check passed successfully!"
+              if curl -sf "http://127.0.0.1:${APP_PORT}/health"; then
+                echo "Health check passed"
                 break
               fi
-              echo "Waiting for application to boot... attempt $i/10"
+              echo "Waiting for app to become healthy... ($i/10)"
               sleep 3
             done
 
-            echo "=== Verifying /version and /status endpoints ==="
-            echo "Version info:"
-            curl -s http://127.0.0.1:${APP_PORT}/version || echo "Warning: /version endpoint not responding"
-            echo -e "\nStatus info:"
-            curl -s http://127.0.0.1:${APP_PORT}/status || echo "Warning: /status endpoint not responding"
-            
+            # 8. Check /version and /status on the remote host
+            curl -sf "http://127.0.0.1:${APP_PORT}/version"
+            curl -sf "http://127.0.0.1:${APP_PORT}/status"
+
       - name: Validate deployed app from GitHub Actions
-        env:
-          DEPLOY_HOST: ${{ secrets.EC2_HOST }}
-          APP_PORT: ${{ env.APP_PORT }}
         run: |
-          echo "=== Step 8: Remote Validation from GitHub Runner ==="
-          BASE_URL="http://${DEPLOY_HOST}:${APP_PORT}"
-          
-          echo "Testing external /health endpoint..."
-          curl -s --fail --max-time 5 "${BASE_URL}/health"
-          
-          echo -e "\nTesting external /version endpoint..."
-          curl -s --fail --max-time 5 "${BASE_URL}/version"
-          
-          echo -e "\nTesting external /status endpoint..."
-          curl -s --fail --max-time 5 "${BASE_URL}/status"
-          
-          echo -e "\nDeployment successfully validated externally!"
+          BASE_URL="http://${{ secrets.EC2_HOST }}:${{ env.APP_PORT }}"
+          for path in health version status; do
+            echo "Checking $BASE_URL/$path"
+            curl -sf "$BASE_URL/$path" || { echo "Validation failed for /$path"; exit 1; }
+          done
