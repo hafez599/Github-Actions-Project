@@ -49,6 +49,7 @@ jobs:
         run: |
           TAG="$(date -u +%Y-%m-%d)-${GITHUB_RUN_ID}"
           echo "value=$TAG" >> "$GITHUB_OUTPUT"
+          echo "DEBUG: image-tag step produced value=[$TAG]"
 
       - name: Create full image reference
         id: image-ref
@@ -56,7 +57,11 @@ jobs:
           REGISTRY_HOST: ${{ secrets.ECR_REGISTRY }}
           REPO_NAME: ${{ secrets.ECR_REPOSITORY }}
         run: |
+          echo "DEBUG: REGISTRY_HOST=[$REGISTRY_HOST]"
+          echo "DEBUG: REPO_NAME=[$REPO_NAME]"
+          echo "DEBUG: tag-from-prev-step=[${{ steps.image-tag.outputs.value }}]"
           REF="$REGISTRY_HOST/$REPO_NAME:${{ steps.image-tag.outputs.value }}"
+          echo "DEBUG: REF=[$REF]"
           echo "value=$REF" >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
@@ -74,7 +79,7 @@ jobs:
 
       - name: Show image reference
         run: |
-          echo "Target Registry Image: ${{ steps.image-ref.outputs.value }}"
+          echo "Target Registry Image: [${{ steps.image-ref.outputs.value }}]"
 
       - name: Build and push release image
         uses: docker/build-push-action@v6
@@ -83,6 +88,11 @@ jobs:
           file: ./Dockerfile
           push: true
           tags: ${{ steps.image-ref.outputs.value }}
+
+      - name: DEBUG job outputs at end of build job
+        run: |
+          echo "FINAL image_tag output=[${{ steps.image-tag.outputs.value }}]"
+          echo "FINAL image_ref output=[${{ steps.image-ref.outputs.value }}]"
 
   deploy-to-host:
     name: Deploy to remote host
@@ -93,8 +103,8 @@ jobs:
     steps:
       - name: Debug needs outputs
         run: |
-          echo "tag=[${{ needs.build-and-push.outputs.image_tag }}]"
-          echo "ref=[${{ needs.build-and-push.outputs.image_ref }}]"
+          echo "DEBUG (deploy job) tag=[${{ needs.build-and-push.outputs.image_tag }}]"
+          echo "DEBUG (deploy job) ref=[${{ needs.build-and-push.outputs.image_ref }}]"
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -127,7 +137,8 @@ jobs:
             APP_PORT="${{ env.APP_PORT }}"
             DEPLOYED_AT="${{ github.run_id }}"
 
-            echo "Deploying image: $IMAGE_REF"
+            echo "DEBUG (remote script) IMAGE_REF=[$IMAGE_REF]"
+            echo "DEBUG (remote script) IMAGE_TAG=[$IMAGE_TAG]"
 
             docker --version
             echo "$REGISTRY_PASSWORD" | docker login --username AWS --password-stdin "$REGISTRY_HOST"
