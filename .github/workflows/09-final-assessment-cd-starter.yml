@@ -139,20 +139,20 @@ jobs:
           envs: REGISTRY_HOST,REGISTRY_PASSWORD
           script: |
             set -e
-      
+
             IMAGE_REF="${{ needs.build-and-push.outputs.image_ref }}"
             IMAGE_TAG="${{ needs.build-and-push.outputs.image_tag }}"
             COMMIT_SHA="${{ github.sha }}"
             APP_PORT="${{ env.APP_PORT }}"
             DEPLOYED_AT="${{ github.run_id }}"
-      
+
             echo "Deploying image: $IMAGE_REF"
-      
+
             docker --version
             echo "$REGISTRY_PASSWORD" | docker login --username AWS --password-stdin "$REGISTRY_HOST"
             docker pull "$IMAGE_REF"
             docker rm -f "${{ env.IMAGE_NAME }}" || true
-      
+
             docker run -d \
               --name "${{ env.IMAGE_NAME }}" \
               -p "${APP_PORT}:${APP_PORT}" \
@@ -163,7 +163,7 @@ jobs:
               -e IMAGE_TAG="$IMAGE_TAG" \
               -e DEPLOY_MODE=ci \
               "$IMAGE_REF"
-      
+
             for i in {1..10}; do
               if curl -sf "http://127.0.0.1:${APP_PORT}/health"; then
                 echo "Health check passed"
@@ -172,6 +172,6 @@ jobs:
               echo "Waiting for app to become healthy... ($i/10)"
               sleep 3
             done
-      
+
             curl -sf "http://127.0.0.1:${APP_PORT}/version"
             curl -sf "http://127.0.0.1:${APP_PORT}/status"
