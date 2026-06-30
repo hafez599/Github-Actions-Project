@@ -19,8 +19,6 @@ jobs:
 
     outputs:
       image_tag: "${{ steps.image-tag.outputs.value }}"
-      image_ref: "${{ steps.image-ref.outputs.value }}"
-
     steps:
       - name: Check required GitHub secrets
         env:
@@ -131,7 +129,7 @@ jobs:
           script: |
             set -e
 
-            IMAGE_REF="${{ needs.build-and-push.outputs.image_ref }}"
+            IIMAGE_REF="${{ secrets.ECR_REGISTRY }}/${{ secrets.ECR_REPOSITORY }}:${IMAGE_TAG}"
             IMAGE_TAG="${{ needs.build-and-push.outputs.image_tag }}"
             COMMIT_SHA="${{ github.sha }}"
             APP_PORT="${{ env.APP_PORT }}"
