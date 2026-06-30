@@ -108,8 +108,6 @@ jobs:
           file: ./Dockerfile
           push: true
           tags: ${{ steps.image-ref.outputs.value }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
 
   deploy-to-host:
     name: Deploy to remote host
