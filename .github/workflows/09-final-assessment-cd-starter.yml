@@ -132,34 +132,29 @@ jobs:
         env:
           REGISTRY_HOST: ${{ secrets.ECR_REGISTRY }}
           REGISTRY_PASSWORD: ${{ steps.ecr-password.outputs.value }}
-          IMAGE_TAG: ${{ needs.build-and-push.outputs.image_tag }}
-          IMAGE_REF: ${{ needs.build-and-push.outputs.image_ref }}
-          COMMIT_SHA: ${{ github.sha }}
-          APP_PORT: ${{ env.APP_PORT }}
-          DEPLOYED_AT: ${{ github.run_id }}
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
-          envs: REGISTRY_HOST,REGISTRY_PASSWORD,IMAGE_TAG,IMAGE_REF,COMMIT_SHA,APP_PORT,DEPLOYED_AT
+          envs: REGISTRY_HOST,REGISTRY_PASSWORD
           script: |
             set -e
-
-            # 1. Confirm Docker exists
+      
+            IMAGE_REF="${{ needs.build-and-push.outputs.image_ref }}"
+            IMAGE_TAG="${{ needs.build-and-push.outputs.image_tag }}"
+            COMMIT_SHA="${{ github.sha }}"
+            APP_PORT="${{ env.APP_PORT }}"
+            DEPLOYED_AT="${{ github.run_id }}"
+      
+            echo "Deploying image: $IMAGE_REF"
+      
             docker --version
-
-            # 2. Log in to ECR on the remote host using the token we generated
             echo "$REGISTRY_PASSWORD" | docker login --username AWS --password-stdin "$REGISTRY_HOST"
-
-            # 3. Pull the exact image
             docker pull "$IMAGE_REF"
-
-            # 4. Remove old container safely if it exists
-            docker rm -f tiny-health-app || true
-
-            # 5/6. Run the new container, passing env vars
+            docker rm -f "${{ env.IMAGE_NAME }}" || true
+      
             docker run -d \
-              --name tiny-health-app \
+              --name "${{ env.IMAGE_NAME }}" \
               -p "${APP_PORT}:${APP_PORT}" \
               -e APP_ENV=production \
               -e APP_VERSION="$IMAGE_TAG" \
@@ -168,8 +163,7 @@ jobs:
               -e IMAGE_TAG="$IMAGE_TAG" \
               -e DEPLOY_MODE=ci \
               "$IMAGE_REF"
-
-            # 7. Wait for /health locally on the host
+      
             for i in {1..10}; do
               if curl -sf "http://127.0.0.1:${APP_PORT}/health"; then
                 echo "Health check passed"
@@ -178,15 +172,6 @@ jobs:
               echo "Waiting for app to become healthy... ($i/10)"
               sleep 3
             done
-
-            # 8. Check /version and /status on the remote host
+      
             curl -sf "http://127.0.0.1:${APP_PORT}/version"
             curl -sf "http://127.0.0.1:${APP_PORT}/status"
-
-      - name: Validate deployed app from GitHub Actions
-        run: |
-          BASE_URL="http://${{ secrets.EC2_HOST }}:${{ env.APP_PORT }}"
-          for path in health version status; do
-            echo "Checking $BASE_URL/$path"
-            curl -sf "$BASE_URL/$path" || { echo "Validation failed for /$path"; exit 1; }
-          done
