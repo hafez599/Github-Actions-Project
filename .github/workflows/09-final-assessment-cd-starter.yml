@@ -1,6 +1,5 @@
 name: 09 Final Assessment CD
 
-# This workflow runs only after trusted code reaches `main` via a closed and merged PR.
 on:
   pull_request:
     branches:
@@ -19,11 +18,10 @@ jobs:
     runs-on: ubuntu-latest
 
     outputs:
-      image_tag: ${{ steps.image-tag.outputs.value }}
-      image_ref:  ${{ steps.image-ref.outputs.value }}
+      image_tag: "${{ steps.image-tag.outputs.value }}"
+      image_ref: "${{ steps.image-ref.outputs.value }}"
 
     steps:
-      # Step 1: Confirm required secrets exist and fail clearly if any are missing
       - name: Check required GitHub secrets
         env:
           REGISTRY_HOST: ${{ secrets.ECR_REGISTRY }}
@@ -37,38 +35,33 @@ jobs:
         run: |
           for var in REGISTRY_HOST REPO_NAME DEPLOY_HOST DEPLOY_USER DEPLOY_SSH_KEY AWS_ACCESS_KEY AWS_SECRET_KEY AWS_REGION_KEY; do
             if [ -z "${!var}" ]; then
-              echo "Error: Required environment variable $var is missing."
+              echo "Error: Required secret for $var is missing."
               exit 1
             fi
           done
           echo "All required secrets are validated."
 
-      # Step 2: Check out the code
       - name: Check out repository
         uses: actions/checkout@v4
 
-      # Step 3: Create one traceable image tag
-      - name: Set image tag
+      - name: Create image tag
         id: image-tag
         run: |
-          TODAY="$(date -u +%Y-%m-%d)"
-          IMAGE_TAG="${TODAY}-${GITHUB_RUN_ID}"
-          echo "value=$IMAGE_TAG" >> "$GITHUB_OUTPUT"
+          TAG="$(date -u +%Y-%m-%d)-${GITHUB_RUN_ID}"
+          echo "value=$TAG" >> "$GITHUB_OUTPUT"
 
-      # Step 4: Create the full image reference using your ECR host and repository secrets
       - name: Create full image reference
         id: image-ref
         env:
           REGISTRY_HOST: ${{ secrets.ECR_REGISTRY }}
+          REPO_NAME: ${{ secrets.ECR_REPOSITORY }}
         run: |
-          REF="${REGISTRY_HOST}/${{ env.IMAGE_NAME }}:${{ steps.image-tag.outputs.value }}"
+          REF="$REGISTRY_HOST/$REPO_NAME:${{ steps.image-tag.outputs.value }}"
           echo "value=$REF" >> "$GITHUB_OUTPUT"
 
-      # Step 5: Prepare Buildx
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # Step 6: Log in to the registry via AWS configuration tools
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -77,15 +70,12 @@ jobs:
           aws-region: ${{ secrets.AWS_REGION }}
 
       - name: Log in to Amazon ECR
-        id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      # Step 7: Show the image reference in logs
       - name: Show image reference
         run: |
           echo "Target Registry Image: ${{ steps.image-ref.outputs.value }}"
 
-      # Step 8: Build and push the release image using Buildx
       - name: Build and push release image
         uses: docker/build-push-action@v6
         with:
@@ -99,12 +89,13 @@ jobs:
     needs:
       - build-and-push
     runs-on: ubuntu-latest
-    
-    env:
-      IMAGE_NAME: myapp
-      APP_PORT: "8000"
-      
+
     steps:
+      - name: Debug needs outputs
+        run: |
+          echo "tag=[${{ needs.build-and-push.outputs.image_tag }}]"
+          echo "ref=[${{ needs.build-and-push.outputs.image_ref }}]"
+
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -122,30 +113,29 @@ jobs:
         env:
           REGISTRY_HOST: ${{ secrets.ECR_REGISTRY }}
           REGISTRY_PASSWORD: ${{ steps.ecr-password.outputs.value }}
-          IMAGE_REF: ${{ needs.build-and-push.outputs.image_ref }}
-          IMAGE_TAG: ${{ needs.build-and-push.outputs.image_tag }}
-          IMAGE_NAME: ${{ env.IMAGE_NAME }}
-          APP_PORT: ${{ env.APP_PORT }}
-          COMMIT_SHA: ${{ github.sha }}
-          DEPLOYED_AT: ${{ github.run_id }}
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
-          envs: REGISTRY_HOST,REGISTRY_PASSWORD,IMAGE_REF,IMAGE_TAG,IMAGE_NAME,APP_PORT,COMMIT_SHA,DEPLOYED_AT
+          envs: REGISTRY_HOST,REGISTRY_PASSWORD
           script: |
             set -e
+
+            IMAGE_REF="${{ needs.build-and-push.outputs.image_ref }}"
+            IMAGE_TAG="${{ needs.build-and-push.outputs.image_tag }}"
+            COMMIT_SHA="${{ github.sha }}"
+            APP_PORT="${{ env.APP_PORT }}"
+            DEPLOYED_AT="${{ github.run_id }}"
 
             echo "Deploying image: $IMAGE_REF"
 
             docker --version
             echo "$REGISTRY_PASSWORD" | docker login --username AWS --password-stdin "$REGISTRY_HOST"
-            
             docker pull "$IMAGE_REF"
-            docker rm -f "$IMAGE_NAME" || true
+            docker rm -f "${{ env.IMAGE_NAME }}" || true
 
             docker run -d \
-              --name "$IMAGE_NAME" \
+              --name "${{ env.IMAGE_NAME }}" \
               -p "${APP_PORT}:${APP_PORT}" \
               -e APP_ENV=production \
               -e APP_VERSION="$IMAGE_TAG" \
@@ -166,3 +156,11 @@ jobs:
 
             curl -sf "http://127.0.0.1:${APP_PORT}/version"
             curl -sf "http://127.0.0.1:${APP_PORT}/status"
+
+      - name: Validate deployed app from GitHub Actions
+        run: |
+          BASE_URL="http://${{ secrets.EC2_HOST }}:${{ env.APP_PORT }}"
+          for path in health version status; do
+            echo "Checking $BASE_URL/$path"
+            curl -sf "$BASE_URL/$path" || { echo "Validation failed for /$path"; exit 1; }
+          done
